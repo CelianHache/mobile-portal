@@ -3,6 +3,11 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- WebRTC surveille les réseaux Android (NetworkMonitor) : sans ces permissions, son thread réseau plante. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
     <!-- Android 17+ : obligatoire pour joindre les appareils du réseau local (Wi-Fi, point d'accès). -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
