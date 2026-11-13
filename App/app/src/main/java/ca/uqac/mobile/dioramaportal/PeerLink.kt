@@ -9,7 +9,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.BufferedReader
 import java.io.BufferedWriter
@@ -41,8 +41,9 @@ class PeerLink {
     private val _status = MutableStateFlow(Status.IDLE)
     val status: StateFlow<Status> = _status.asStateFlow()
 
-    private val _log = MutableStateFlow<List<String>>(emptyList())
-    val log: StateFlow<List<String>> = _log.asStateFlow()
+    /** Adresse de l'appareil avec lequel on est en appel (null hors appel). */
+    private val _peer = MutableStateFlow<String?>(null)
+    val peer: StateFlow<String?> = _peer.asStateFlow()
 
     /** Appelé quand la session TCP s'ouvre. `initiator` = c'est nous qui nous sommes connectés. */
     var onConnected: ((initiator: Boolean) -> Unit)? = null
@@ -51,7 +52,8 @@ class PeerLink {
     /** Appelé quand la session TCP se ferme. */
     var onDisconnected: (() -> Unit)? = null
 
-    private var server: ServerSocket? = null
+    @Volatile private var server: ServerSocket? = null
+    @Volatile private var closed = false
     @Volatile private var socket: Socket? = null
     private var writer: BufferedWriter? = null
     private var readJob: Job? = null
@@ -60,18 +62,39 @@ class PeerLink {
     fun startListening() {
         if (server != null) return
         scope.launch {
+            val ss = bindWithRetry() ?: return@launch
+            server = ss
+            if (socket == null) _status.value = Status.LISTENING
+            log("En écoute sur le port $PORT")
             try {
-                val ss = ServerSocket(PORT).also { server = it }
-                if (socket == null) _status.value = Status.LISTENING
-                log("En écoute sur le port $PORT")
                 while (!ss.isClosed) {
                     val incoming = ss.accept()
                     scope.launch { handleIncoming(incoming) }
                 }
             } catch (e: Exception) {
-                if (server?.isClosed != true) log("Erreur serveur : ${e.message}")
+                if (!closed) log("Erreur serveur : ${e.message}")
             }
         }
+    }
+
+    /**
+     * Le port peut être encore tenu un instant par l'instance précédente (activité relancée
+     * avant que l'ancienne soit fermée) : on réessaie quelques secondes au lieu d'abandonner.
+     */
+    private suspend fun bindWithRetry(): ServerSocket? {
+        repeat(BIND_ATTEMPTS) { attempt ->
+            if (closed) return null
+            try {
+                return ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(PORT))
+                }
+            } catch (e: Exception) {
+                if (attempt == BIND_ATTEMPTS - 1) log("Erreur serveur : port $PORT indisponible (${e.message})")
+                delay(BIND_RETRY_MS)
+            }
+        }
+        return null
     }
 
     /** Se connecte à l'autre appareil (IP ou nom d'hôte). */
@@ -108,11 +131,12 @@ class PeerLink {
     }
 
     /** Ajoute une ligne au journal affiché à l'écran. */
-    fun info(msg: String) = log(msg)
+    fun info(msg: String) = AppLog.log(msg)
 
     fun disconnect() {
         val s = socket ?: return
         socket = null
+        _peer.value = null
         readJob?.cancel()
         readJob = null
         runCatching { s.close() }
@@ -123,6 +147,7 @@ class PeerLink {
     }
 
     fun close() {
+        closed = true
         disconnect()
         runCatching { server?.close() }
         server = null
@@ -168,6 +193,8 @@ class PeerLink {
         s.tcpNoDelay = true
         socket = s
         writer = s.getOutputStream().bufferedWriter()
+        AppLog.newCall() // le journal de l'appel commence ici
+        _peer.value = s.inetAddress.hostAddress
         _status.value = Status.CONNECTED
         log("Connecté à ${s.inetAddress.hostAddress}" + if (initiator) " (initiateur)" else "")
         // Avant de lire : l'appel vidéo doit exister quand l'offre arrive.
@@ -190,7 +217,7 @@ class PeerLink {
     }
 
     private fun log(msg: String) {
-        _log.update { (it + msg).takeLast(200) }
+        AppLog.log(msg)
     }
 
     companion object {
@@ -200,6 +227,8 @@ class PeerLink {
         const val PONG = "PONG"
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val FIRST_LINE_TIMEOUT_MS = 5000
+        private const val BIND_ATTEMPTS = 20
+        private const val BIND_RETRY_MS = 500L
 
         /** Adresses IPv4 locales (l'IP Tailscale commence par 100.). */
         fun localAddresses(): List<String> = runCatching {

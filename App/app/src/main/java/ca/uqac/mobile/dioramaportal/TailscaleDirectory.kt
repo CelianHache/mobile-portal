@@ -1,6 +1,7 @@
 package ca.uqac.mobile.dioramaportal
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -74,9 +75,14 @@ class TailscaleDirectory(context: Context) {
                     .map { d -> async { if (d.isSelf) d else d.copy(appOpen = probe(d.ip)) } }
                     .awaitAll()
                     .sortedWith(compareBy({ it.isSelf }, { !it.appOpen }, { it.online == false }, { it.hostname }))
+                AppLog.log("Tailscale : ${devices.size} appareil(s), app ouverte sur ${devices.count { it.appOpen }}")
                 State.Loaded(devices)
+            } catch (e: CancellationException) {
+                throw e // écran fermé : pas une erreur
             } catch (e: Exception) {
-                State.Error(e.message ?: e.javaClass.simpleName)
+                val msg = e.message ?: e.javaClass.simpleName
+                AppLog.log("Tailscale : erreur API : $msg")
+                State.Error(msg)
             }
         }
     }

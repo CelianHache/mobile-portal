@@ -10,19 +10,23 @@ import kotlinx.coroutines.flow.MutableStateFlow
  */
 class CallViewModel(app: Application) : AndroidViewModel(app) {
 
+    // En premier : le journal doit être prêt avant que les autres objets écrivent dedans.
+    @Suppress("unused")
+    private val logReady = AppLog.init(app)
+
     val link = PeerLink()
-    val call = VideoCall(app, sendSignal = link::send, log = link::info)
+    val call = VideoCall(app, sendSignal = link::send, log = AppLog::log)
     val tailscale = TailscaleDirectory(app)
 
-    /** Mode fenêtre : vidéo distante seule, plein écran, comme dans le boîtier diorama. */
-    val windowMode = MutableStateFlow(false)
+    /** Mode portail : vidéo distante seule, plein écran, comme dans le boîtier diorama. */
+    val portalMode = MutableStateFlow(false)
 
     init {
         link.onConnected = { initiator -> call.start(initiator) }
         link.onSignal = { json -> call.handleSignal(json) }
         link.onDisconnected = {
             call.stop()
-            windowMode.value = false
+            portalMode.value = false
         }
         link.startListening()
         tailscale.refresh()
