@@ -1,5 +1,7 @@
-package ca.uqac.mobile.dioramaportal
+package ca.uqac.mobile.dioramaportal.Connection
 
+import android.os.Build
+import ca.uqac.mobile.dioramaportal.Log.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -107,7 +109,7 @@ class PeerLink {
                 val s = Socket()
                 s.connect(InetSocketAddress(host.trim(), PORT), CONNECT_TIMEOUT_MS)
                 attach(s, initiator = true)
-                send("hello from ${android.os.Build.MODEL}")
+                send("hello from ${Build.MODEL}")
             } catch (e: Exception) {
                 log("Échec : ${e.message}")
                 _status.value = if (server != null) Status.LISTENING else Status.IDLE

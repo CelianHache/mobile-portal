@@ -1,4 +1,4 @@
-package ca.uqac.mobile.dioramaportal
+package ca.uqac.mobile.dioramaportal.Screen
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +35,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import ca.uqac.mobile.dioramaportal.Log.AppLog
+import ca.uqac.mobile.dioramaportal.ViewModel.CallViewModel
+import ca.uqac.mobile.dioramaportal.Log.LogList
+import ca.uqac.mobile.dioramaportal.Connection.PeerLink
+import ca.uqac.mobile.dioramaportal.Connection.TailscaleDirectory
 
 /**
  * Page principale (hors appel) : un onglet par mode de connexion, et la console de l'app

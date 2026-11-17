@@ -1,4 +1,4 @@
-package ca.uqac.mobile.dioramaportal
+package ca.uqac.mobile.dioramaportal.Log
 
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items

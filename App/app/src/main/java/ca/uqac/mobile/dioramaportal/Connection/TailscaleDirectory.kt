@@ -1,18 +1,23 @@
-package ca.uqac.mobile.dioramaportal
+package ca.uqac.mobile.dioramaportal.Connection
 
 import android.content.Context
+import androidx.core.content.edit
+import ca.uqac.mobile.dioramaportal.Log.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -48,6 +53,7 @@ class TailscaleDirectory(context: Context) {
     // Exclu des sauvegardes Android (voir res/xml/*backup*), la clé ne quitte pas l'appareil.
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var refreshJob: Job? = null
 
     private val _state = MutableStateFlow<State>(if (apiKey() == null) State.NoKey else State.Loaded(emptyList()))
     val state: StateFlow<State> = _state.asStateFlow()
@@ -55,22 +61,24 @@ class TailscaleDirectory(context: Context) {
     private fun apiKey(): String? = prefs.getString(KEY_API, null)?.takeIf { it.isNotBlank() }
 
     fun saveKey(key: String) {
-        prefs.edit().putString(KEY_API, key.trim()).apply()
+        prefs.edit { putString(KEY_API, key.trim()) }
         refresh()
     }
 
     fun forgetKey() {
-        prefs.edit().remove(KEY_API).apply()
+        refreshJob?.cancel()
+        prefs.edit { remove(KEY_API) }
         _state.value = State.NoKey
     }
 
     fun refresh() {
         val key = apiKey() ?: run { _state.value = State.NoKey; return }
         _state.value = State.Loading
-        scope.launch {
+        refreshJob?.cancel() // un seul rafraîchissement à la fois
+        refreshJob = scope.launch {
             _state.value = try {
                 val myIps = PeerLink.localAddresses().map { it.substringBefore(' ') }.toSet()
-                val devices = fetchDevices(key)
+                val devices = fetchWithRetry(key)
                     .map { it.copy(isSelf = it.ip in myIps) }
                     .map { d -> async { if (d.isSelf) d else d.copy(appOpen = probe(d.ip)) } }
                     .awaitAll()
@@ -88,6 +96,23 @@ class TailscaleDirectory(context: Context) {
     }
 
     fun close() = scope.cancel()
+
+    /**
+     * Au lancement de l'app, le réseau (DNS, Tailscale qui démarre) n'est souvent pas encore
+     * prêt : « Unable to resolve host ». On réessaie quelques fois avant d'afficher une erreur.
+     * Une clé refusée (401/403) n'est pas réessayée.
+     */
+    private suspend fun fetchWithRetry(key: String): List<Device> {
+        RETRY_DELAYS_MS.forEachIndexed { attempt, wait ->
+            try {
+                return fetchDevices(key)
+            } catch (e: IOException) {
+                AppLog.log("Tailscale : réseau pas prêt (${e.message}), nouvel essai dans ${wait / 1000} s (${attempt + 1}/${RETRY_DELAYS_MS.size})")
+                delay(wait)
+            }
+        }
+        return fetchDevices(key) // dernier essai : son erreur est affichée
+    }
 
     private fun fetchDevices(key: String): List<Device> {
         val conn = URL(DEVICES_URL).openConnection() as HttpURLConnection
@@ -143,5 +168,6 @@ class TailscaleDirectory(context: Context) {
         const val KEY_API = "api_key"
         const val DEVICES_URL = "https://api.tailscale.com/api/v2/tailnet/-/devices"
         const val PROBE_TIMEOUT_MS = 1500
+        val RETRY_DELAYS_MS = listOf(2_000L, 4_000L, 8_000L)
     }
 }

@@ -1,4 +1,4 @@
-package ca.uqac.mobile.dioramaportal
+package ca.uqac.mobile.dioramaportal.Screen
 
 import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
@@ -36,6 +36,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import ca.uqac.mobile.dioramaportal.Log.AppLog
+import ca.uqac.mobile.dioramaportal.ViewModel.CallViewModel
+import ca.uqac.mobile.dioramaportal.Log.LogList
+import ca.uqac.mobile.dioramaportal.VideoCall
 import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -62,7 +66,10 @@ fun CallScreen(vm: CallViewModel, modifier: Modifier = Modifier) {
                     OutlinedButton(onClick = { vm.link.disconnect() }) { Text("Raccrocher") }
                 }
                 Text("Journal de l'appel", style = MaterialTheme.typography.labelLarge)
-                LogList(remember(callLog) { callLog.map { it.line } }, Modifier.weight(1f).fillMaxWidth())
+                LogList(
+                    remember(callLog) { callLog.map { it.line } },
+                    Modifier.weight(1f).fillMaxWidth()
+                )
             }
         }
 

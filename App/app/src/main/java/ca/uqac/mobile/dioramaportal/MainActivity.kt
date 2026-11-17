@@ -23,6 +23,11 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import ca.uqac.mobile.dioramaportal.Connection.PeerLink
+import ca.uqac.mobile.dioramaportal.Screen.CallScreen
+import ca.uqac.mobile.dioramaportal.Screen.ConnectScreen
+import ca.uqac.mobile.dioramaportal.Screen.PortalScreen
+import ca.uqac.mobile.dioramaportal.ViewModel.CallViewModel
 import ca.uqac.mobile.dioramaportal.ui.theme.DioramaPortalTheme
 import kotlinx.coroutines.launch
 

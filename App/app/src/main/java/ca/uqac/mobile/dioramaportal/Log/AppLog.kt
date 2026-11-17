@@ -1,6 +1,7 @@
-package ca.uqac.mobile.dioramaportal
+package ca.uqac.mobile.dioramaportal.Log
 
 import android.content.Context
+import android.os.Build
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -60,7 +61,7 @@ object AppLog {
                 .filter { it.isNotBlank() }
                 .takeLast(MAX_HISTORY)
         }
-        log("--- Démarrage de l'app (${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}) ---")
+        log("--- Démarrage de l'app (${Build.MODEL}, Android ${Build.VERSION.RELEASE}) ---")
     }
 
     fun log(message: String) {

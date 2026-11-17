@@ -28,7 +28,7 @@ import java.util.concurrent.Executors
  * Appel vidéo WebRTC minimal entre deux pairs, sans serveur :
  * - pas de STUN/TURN, seulement les candidats « hôte » (Wi-Fi, point d'accès, Tailscale) ;
  * - la signalisation (offre, réponse, candidats ICE) passe en JSON par [sendSignal],
- *   c'est-à-dire par le socket TCP de [PeerLink].
+ *   c'est-à-dire par le socket TCP de [ca.uqac.mobile.dioramaportal.Connection.PeerLink].
  *
  * Toutes les opérations passent par un seul thread ([executor]) pour éviter les courses.
  */

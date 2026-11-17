@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Sans ces lignes, la permission CAMERA rend la caméra (arrière) obligatoire pour installer l'app. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
     <!-- Android 17+ : obligatoire pour joindre les appareils du réseau local (Wi-Fi, point d'accès). -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
@@ -23,7 +25,6 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
             android:theme="@style/Theme.DioramaPortal"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

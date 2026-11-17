@@ -1,7 +1,11 @@
-package ca.uqac.mobile.dioramaportal
+package ca.uqac.mobile.dioramaportal.ViewModel
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import ca.uqac.mobile.dioramaportal.Log.AppLog
+import ca.uqac.mobile.dioramaportal.Connection.PeerLink
+import ca.uqac.mobile.dioramaportal.Connection.TailscaleDirectory
+import ca.uqac.mobile.dioramaportal.VideoCall
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
