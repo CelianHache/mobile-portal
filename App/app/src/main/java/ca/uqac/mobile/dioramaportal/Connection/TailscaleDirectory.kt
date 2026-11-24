@@ -15,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.IOException
@@ -71,12 +72,57 @@ class TailscaleDirectory(context: Context) {
         _state.value = State.NoKey
     }
 
+    /**
+     * Un autre appareil a annoncé sa présence (HELLO / BYE) : on met à jour juste lui,
+     * sans rappeler l'API. S'il n'est pas dans la liste (appareil ajouté au tailnet depuis
+     * le dernier chargement), on recharge la liste pour le découvrir.
+     */
+    fun setAppOpen(ip: String, open: Boolean) {
+        val s = _state.value as? State.Loaded ?: return
+        if (s.devices.none { it.ip == ip }) {
+            if (open) refresh()
+            return
+        }
+        _state.update { current ->
+            if (current !is State.Loaded) current
+            else current.copy(devices = current.devices.map { if (it.ip == ip) it.copy(appOpen = open) else it })
+        }
+    }
+
+    /** Notre app est-elle à l'écran ? Décide si on annonce HELLO après un chargement. */
+    @Volatile private var visible = true
+
+    /**
+     * Notre app passe à l'écran (HELLO) ou en arrière-plan (BYE) : on prévient tout de suite
+     * les autres appareils de la liste, qui mettent à jour notre état sans recharger.
+     */
+    fun setVisible(isVisible: Boolean) {
+        visible = isVisible
+        announce(if (isVisible) PeerLink.HELLO else PeerLink.BYE)
+    }
+
+    /** Le VPN de cet appareil est tombé : on ne peut plus joindre personne. */
+    fun markAllClosed() {
+        _state.update { current ->
+            if (current !is State.Loaded) current
+            else current.copy(devices = current.devices.map { if (it.isSelf) it else it.copy(appOpen = false) })
+        }
+    }
+
+    /** Envoie [message] (HELLO ou BYE) à tous les autres appareils de la liste, en parallèle. */
+    private fun announce(message: String, inScope: CoroutineScope = scope) {
+        val others = (_state.value as? State.Loaded)?.devices?.filterNot { it.isSelf }.orEmpty()
+        others.forEach { d -> inScope.launch { sendLine(d.ip, message) } }
+    }
+
+    /** @Synchronized : appelé depuis l'UI et depuis le callback VPN (autre thread). */
+    @Synchronized
     fun refresh() {
         val key = apiKey() ?: run { _state.value = State.NoKey; return }
         _state.value = State.Loading
         refreshJob?.cancel() // un seul rafraîchissement à la fois
         refreshJob = scope.launch {
-            _state.value = try {
+            val result = try {
                 val myIps = PeerLink.localAddresses().map { it.substringBefore(' ') }.toSet()
                 val devices = fetchWithRetry(key)
                     .map { it.copy(isSelf = it.ip in myIps) }
@@ -92,10 +138,30 @@ class TailscaleDirectory(context: Context) {
                 AppLog.log("Tailscale : erreur API : $msg")
                 State.Error(msg)
             }
+            _state.value = result
+            // Liste à jour : si notre app est à l'écran, on prévient les autres.
+            if (result is State.Loaded && visible) announce(PeerLink.HELLO)
         }
     }
 
-    fun close() = scope.cancel()
+    /**
+     * Fermeture de l'app : on prévient les autres (BYE). L'envoi part d'un scope à part,
+     * car [scope] est annulé juste après et couperait les envois en cours.
+     */
+    fun close() {
+        if (visible) announce(PeerLink.BYE, inScope = CoroutineScope(Dispatchers.IO)) // sinon déjà envoyé
+        scope.cancel()
+    }
+
+    /** Connexion TCP courte : une ligne envoyée, puis fermeture. Les échecs sont ignorés. */
+    private fun sendLine(ip: String, line: String) {
+        runCatching {
+            Socket().use { s ->
+                s.connect(InetSocketAddress(ip, PeerLink.PORT), PROBE_TIMEOUT_MS)
+                s.getOutputStream().write("$line\n".toByteArray())
+            }
+        }
+    }
 
     /**
      * Au lancement de l'app, le réseau (DNS, Tailscale qui démarre) n'est souvent pas encore
@@ -147,17 +213,16 @@ class TailscaleDirectory(context: Context) {
     }
 
     /**
-     * L'app est-elle ouverte sur cet appareil ? On envoie [PeerLink.PING] : l'app répond
-     * sans ouvrir de session. Si elle est déjà en appel, elle ferme la connexion, mais le
-     * port a répondu : elle est bien ouverte.
+     * L'app est-elle à l'écran sur cet appareil ? On envoie [PeerLink.PING] : l'app répond
+     * [PeerLink.PONG] si elle est à l'écran, [PeerLink.AWAY] si elle tourne en arrière-plan.
+     * Seul PONG compte comme « présent ».
      */
     private fun probe(ip: String): Boolean = try {
         Socket().use { s ->
             s.connect(InetSocketAddress(ip, PeerLink.PORT), PROBE_TIMEOUT_MS)
             s.soTimeout = PROBE_TIMEOUT_MS
             s.getOutputStream().write("${PeerLink.PING}\n".toByteArray())
-            runCatching { s.getInputStream().bufferedReader().readLine() }
-            true
+            s.getInputStream().bufferedReader().readLine() == PeerLink.PONG
         }
     } catch (_: Exception) {
         false

@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         vm.call.resumeCamera()
+        vm.setAppVisible(true) // HELLO : les autres nous revoient
     }
 
     /**
@@ -90,7 +91,10 @@ class MainActivity : ComponentActivity() {
      */
     override fun onStop() {
         super.onStop()
-        if (!isChangingConfigurations) vm.call.pauseCamera()
+        if (!isChangingConfigurations) {
+            vm.call.pauseCamera()
+            vm.setAppVisible(false) // BYE : les autres ne nous voient plus
+        }
     }
 
     private val permissionRequest =

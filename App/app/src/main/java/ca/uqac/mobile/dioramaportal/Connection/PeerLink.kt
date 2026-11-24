@@ -60,6 +60,18 @@ class PeerLink {
     private var writer: BufferedWriter? = null
     private var readJob: Job? = null
 
+    /**
+     * Annonce de présence reçue d'un autre appareil : [HELLO] (son app vient de s'ouvrir)
+     * ou [BYE] (elle se ferme). `ip` est l'adresse de l'expéditeur.
+     */
+    var onPresence: ((ip: String, appOpen: Boolean) -> Unit)? = null
+
+    /**
+     * L'app est-elle à l'écran ? Réglé par l'activité (onStart / onStop) via le ViewModel.
+     * En arrière-plan, on répond [AWAY] aux PING : les autres ne nous voient plus.
+     */
+    @Volatile var visible = true
+
     /** Ouvre le port d'écoute et accepte les connexions entrantes. */
     fun startListening() {
         if (server != null) return
@@ -170,7 +182,16 @@ class PeerLink {
             null
         }
         if (first == null || first == PING) {
-            if (first == PING) runCatching { s.getOutputStream().write("$PONG\n".toByteArray()) }
+            // App à l'écran → PONG (présente) ; en arrière-plan → AWAY (on ne doit pas nous voir).
+            val reply = if (visible) PONG else AWAY
+            if (first == PING) runCatching { s.getOutputStream().write("$reply\n".toByteArray()) }
+            runCatching { s.close() }
+            return
+        }
+        if (first == HELLO || first == BYE) {
+            // Annonce de présence : comme PING, aucune session n'est ouverte.
+            log("Présence : $from ${if (first == HELLO) "a ouvert" else "a fermé"} l'app")
+            onPresence?.invoke(from, first == HELLO)
             runCatching { s.close() }
             return
         }
@@ -227,6 +248,11 @@ class PeerLink {
         /** Test de présence : l'app répond [PONG] sans ouvrir de session. */
         const val PING = "PING"
         const val PONG = "PONG"
+        /** Réponse au PING quand l'app tourne mais n'est pas à l'écran. */
+        const val AWAY = "AWAY"
+        /** Annonces de présence, envoyées aux autres appareils sans attendre de réponse. */
+        const val HELLO = "HELLO"
+        const val BYE = "BYE"
         private const val CONNECT_TIMEOUT_MS = 5000
         private const val FIRST_LINE_TIMEOUT_MS = 5000
         private const val BIND_ATTEMPTS = 20
