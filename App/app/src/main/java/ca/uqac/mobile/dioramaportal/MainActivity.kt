@@ -3,6 +3,7 @@ package ca.uqac.mobile.dioramaportal
 import android.Manifest
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -40,6 +41,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Les boutons de volume règlent le volume de l'appel, pas celui des sonneries.
+        volumeControlStream = AudioManager.STREAM_VOICE_CALL
         if (savedInstanceState == null) requestPermissions()
         lifecycleScope.launch {
             combine(vm.portalMode, vm.testMode) { portal, test -> portal || test }.collect { applyPortalMode(it) }
@@ -107,6 +110,9 @@ class MainActivity : ComponentActivity() {
             if (result[Manifest.permission.CAMERA] == false) {
                 Toast.makeText(this, "Sans la caméra, l'autre appareil ne recevra pas d'image", Toast.LENGTH_LONG).show()
             }
+            if (result[Manifest.permission.RECORD_AUDIO] == false) {
+                Toast.makeText(this, "Sans le micro, l'autre appareil ne vous entendra pas", Toast.LENGTH_LONG).show()
+            }
             if (result[LOCAL_NETWORK] == false) {
                 Toast.makeText(
                     this,
@@ -120,6 +126,7 @@ class MainActivity : ComponentActivity() {
     private fun requestPermissions() {
         val wanted = buildList {
             add(Manifest.permission.CAMERA)
+            add(Manifest.permission.RECORD_AUDIO)
             if (Build.VERSION.SDK_INT >= 37) add(LOCAL_NETWORK)
         }.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (wanted.isNotEmpty()) permissionRequest.launch(wanted.toTypedArray())

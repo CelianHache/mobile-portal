@@ -1,6 +1,14 @@
 package ca.uqac.mobile.dioramaportal
 
 import android.content.Context
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import org.webrtc.AudioSource
+import org.webrtc.AudioTrack
+import org.webrtc.audio.JavaAudioDeviceModule
 import org.json.JSONObject
 import org.webrtc.Camera2Enumerator
 import org.webrtc.CameraVideoCapturer
@@ -58,6 +66,17 @@ class VideoCall(
     private var videoSource: VideoSource? = null
     private var localTrack: VideoTrack? = null
 
+    // Son : le module audio Java de WebRTC enregistre le micro et joue le son reçu.
+    private val audioDevice: JavaAudioDeviceModule
+    private val audioManager = appContext.getSystemService(AudioManager::class.java)
+    private var audioSource: AudioSource? = null
+    private var audioTrack: AudioTrack? = null
+    private var savedAudioMode = AudioManager.MODE_NORMAL
+
+    private val _micMuted = MutableStateFlow(false)
+    /** Micro coupé par l'utilisateur (bouton de la page d'appel). */
+    val micMuted: StateFlow<Boolean> = _micMuted
+
     // App en arrière-plan : la caméra ne doit pas tourner (Android la bloque de toute façon).
     private var cameraPaused = false
 
@@ -75,7 +94,14 @@ class VideoCall(
         )
         // Erreurs natives de WebRTC visibles dans logcat (tag org.webrtc.Logging).
         Logging.enableLogToDebugOutput(Logging.Severity.LS_WARNING)
+        // Annulation d'écho et réduction de bruit matérielles quand le téléphone en a :
+        // indispensable en haut-parleur, sinon l'autre s'entend en écho.
+        audioDevice = JavaAudioDeviceModule.builder(appContext)
+            .setUseHardwareAcousticEchoCanceler(true)
+            .setUseHardwareNoiseSuppressor(true)
+            .createAudioDeviceModule()
         factory = PeerConnectionFactory.builder()
+            .setAudioDeviceModule(audioDevice)
             // Le NetworkMonitor Android ne voit ni le point d'accès (swlan0) ni certains VPN,
             // et WebRTC se retrouvait sans aucune interface (« Machine has no networks »).
             // Sans lui, WebRTC liste directement toutes les interfaces du système.
@@ -99,6 +125,8 @@ class VideoCall(
         }
         pc = peer
         localTrack?.let { peer.addTrack(it, listOf("diorama")) }
+        startAudio()
+        audioTrack?.let { peer.addTrack(it, listOf("diorama")) }
 
         if (initiator) {
             peer.createOffer(object : SdpAdapter("createOffer") {
@@ -157,6 +185,7 @@ class VideoCall(
         cameraPaused = true
         runCatching { capturer?.stopCapture() }
         localTrack?.setEnabled(false)
+        audioTrack?.setEnabled(false) // micro coupé aussi en arrière-plan
     }
 
     /** App au premier plan : la caméra repart si un appel est en cours. */
@@ -164,7 +193,15 @@ class VideoCall(
         if (!cameraPaused) return@execute
         cameraPaused = false
         localTrack?.setEnabled(true)
+        audioTrack?.setEnabled(!_micMuted.value)
         capturer?.startCapture(CAPTURE_WIDTH, CAPTURE_HEIGHT, CAPTURE_FPS)
+    }
+
+    /** Coupe ou réactive notre micro : l'autre appareil ne reçoit plus que du silence. */
+    fun setMicMuted(muted: Boolean) = executor.execute {
+        _micMuted.value = muted
+        audioTrack?.setEnabled(!muted && !cameraPaused)
+        log(if (muted) "Micro coupé" else "Micro réactivé")
     }
 
     /** Test caméra sans appel : démarre la caméra seule (aucune connexion). */
@@ -185,7 +222,58 @@ class VideoCall(
         pc = null
         remoteDescriptionSet = false
         pendingCandidates.clear()
+        stopAudio()
         if (!previewing) stopCamera()
+    }
+
+    /** Micro → piste audio envoyée à l'autre, et son de l'appel sur le haut-parleur. */
+    private fun startAudio() {
+        if (audioTrack != null) return
+        val source = factory.createAudioSource(MediaConstraints())
+        val track = factory.createAudioTrack("micro", source)
+        track.setEnabled(!_micMuted.value && !cameraPaused)
+        audioSource = source
+        audioTrack = track
+        routeToSpeaker(true)
+    }
+
+    private fun stopAudio() {
+        audioTrack?.dispose()
+        audioTrack = null
+        audioSource?.dispose()
+        audioSource = null
+        routeToSpeaker(false)
+        _micMuted.value = false
+    }
+
+    /**
+     * Mode « communication » (celui des appels : annulation d'écho active) et son sur le
+     * haut-parleur plutôt que l'écouteur : le téléphone est posé dans le diorama, pas à l'oreille.
+     */
+    private fun routeToSpeaker(on: Boolean) {
+        val am = audioManager ?: return
+        runCatching {
+            if (on) {
+                savedAudioMode = am.mode
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                if (Build.VERSION.SDK_INT >= 31) {
+                    am.availableCommunicationDevices
+                        .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                        ?.let { am.setCommunicationDevice(it) }
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = true
+                }
+            } else {
+                if (Build.VERSION.SDK_INT >= 31) {
+                    am.clearCommunicationDevice()
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = false
+                }
+                am.mode = savedAudioMode
+            }
+        }.onFailure { log("Son : routage impossible : ${it.message}") }
     }
 
     private fun stopCamera() {
@@ -206,6 +294,7 @@ class VideoCall(
             previewing = false
             stopCamera()
             factory.dispose()
+            audioDevice.release()
             eglBase.release()
         }
         executor.shutdown()
@@ -256,7 +345,11 @@ class VideoCall(
         }
 
         override fun onTrack(transceiver: RtpTransceiver) {
-            (transceiver.receiver.track() as? VideoTrack)?.addSink(remoteSink)
+            when (val track = transceiver.receiver.track()) {
+                is VideoTrack -> track.addSink(remoteSink)
+                // Le son reçu est joué tout seul par le module audio : rien à brancher.
+                is AudioTrack -> log("WebRTC : son de l'autre appareil reçu")
+            }
         }
 
         override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {

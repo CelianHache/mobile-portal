@@ -63,6 +63,7 @@ import org.webrtc.SurfaceViewRenderer
 fun CallScreen(vm: CallViewModel, modifier: Modifier = Modifier) {
     val peer by vm.link.peer.collectAsState()
     val callLog by AppLog.call.collectAsState()
+    val micMuted by vm.call.micMuted.collectAsState()
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     // Ratio largeur/hauteur du flux reçu (connu à la première image). Gardé à la rotation.
     var remoteRatio by rememberSaveable { mutableStateOf<Float?>(null) }
@@ -77,6 +78,9 @@ fun CallScreen(vm: CallViewModel, modifier: Modifier = Modifier) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { vm.portalMode.value = true }) { Text("Mode portail") }
                     OutlinedButton(onClick = { vm.link.disconnect() }) { Text("Raccrocher") }
+                    OutlinedButton(onClick = { vm.call.setMicMuted(!micMuted) }) {
+                        Text(if (micMuted) "Réactiver le micro" else "Couper le micro")
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(showShape, { showShape = true }, label = { Text("Taille du portail") })
