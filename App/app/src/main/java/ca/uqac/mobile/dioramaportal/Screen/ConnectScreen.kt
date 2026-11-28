@@ -70,7 +70,7 @@ fun ConnectScreen(vm: CallViewModel, modifier: Modifier = Modifier) {
                 else -> TailscaleTab(vm.link, vm.tailscale, connecting)
             }
         }
-        ConsolePanel()
+        ConsolePanel(onTest = vm::startTest)
     }
 }
 
@@ -204,7 +204,7 @@ private fun SectionTitle(text: String) {
  * - Historique : tout le fichier app.log, anciennes sessions comprises.
  */
 @Composable
-private fun ConsolePanel() {
+private fun ConsolePanel(onTest: () -> Unit) {
     var open by rememberSaveable { mutableStateOf(false) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val entries by AppLog.all.collectAsState()
@@ -229,6 +229,7 @@ private fun ConsolePanel() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f)
             )
+            TextButton(onClick = onTest) { Text("Test caméra") }
             TextButton(onClick = { open = !open }) { Text(if (open) "Fermer ▼" else "Ouvrir ▲") }
         }
         if (open) {

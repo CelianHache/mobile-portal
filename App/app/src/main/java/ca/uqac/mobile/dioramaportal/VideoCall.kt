@@ -42,8 +42,14 @@ class VideoCall(
     private val executor = Executors.newSingleThreadExecutor()
 
     /** Les vues s'y branchent quand elles existent (voir l'écran Compose). */
+    /** Recadrage / étirement appliqué à la vidéo reçue (lu sur le thread de décodage). */
+    @Volatile var portalShape = PortalShape()
+
     val localSink = ProxySink()
-    val remoteSink = ProxySink()
+    val remoteSink = ProxySink { portalShape.transform(it) }
+
+    /** Test sans appel : notre caméra, avec la même forme de portail que la vidéo reçue. */
+    val previewSink = ProxySink { portalShape.transform(it) }
 
     private val factory: PeerConnectionFactory
     private var pc: PeerConnection? = null
@@ -54,6 +60,9 @@ class VideoCall(
 
     // App en arrière-plan : la caméra ne doit pas tourner (Android la bloque de toute façon).
     private var cameraPaused = false
+
+    // Test caméra en cours (sans appel) : la caméra tourne même si pc == null.
+    private var previewing = false
 
     // Les candidats ICE qui arrivent avant la description distante sont mis de côté.
     private var remoteDescriptionSet = false
@@ -79,7 +88,7 @@ class VideoCall(
     /** Démarre la caméra et la connexion. L'initiateur envoie l'offre. */
     fun start(initiator: Boolean) = executor.execute {
         if (pc != null) return@execute
-        startCamera()
+        if (capturer == null) startCamera() // déjà démarrée si un test caméra était en cours
 
         val config = PeerConnection.RTCConfiguration(emptyList()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
@@ -158,12 +167,28 @@ class VideoCall(
         capturer?.startCapture(CAPTURE_WIDTH, CAPTURE_HEIGHT, CAPTURE_FPS)
     }
 
-    /** Raccroche : ferme la connexion et coupe la caméra. */
+    /** Test caméra sans appel : démarre la caméra seule (aucune connexion). */
+    fun startPreview() = executor.execute {
+        previewing = true
+        if (capturer == null) startCamera()
+    }
+
+    /** Fin du test caméra : coupe la caméra, sauf si un appel l'utilise. */
+    fun stopPreview() = executor.execute {
+        previewing = false
+        if (pc == null) stopCamera()
+    }
+
+    /** Raccroche : ferme la connexion et coupe la caméra (sauf test caméra en cours). */
     fun stop() = executor.execute {
         pc?.dispose()
         pc = null
         remoteDescriptionSet = false
         pendingCandidates.clear()
+        if (!previewing) stopCamera()
+    }
+
+    private fun stopCamera() {
         runCatching { capturer?.stopCapture() }
         capturer?.dispose()
         capturer = null
@@ -178,6 +203,8 @@ class VideoCall(
     fun release() {
         stop()
         executor.execute {
+            previewing = false
+            stopCamera()
             factory.dispose()
             eglBase.release()
         }
@@ -205,6 +232,7 @@ class VideoCall(
             val track = factory.createVideoTrack("camera", source)
             track.setEnabled(!cameraPaused)
             track.addSink(localSink)
+            track.addSink(previewSink)
             textureHelper = helper
             videoSource = source
             capturer = cam
@@ -255,11 +283,27 @@ class VideoCall(
         override fun onSetFailure(error: String?) = log("WebRTC : échec $what : $error")
     }
 
-    /** Relais vers une vue qui peut apparaître ou disparaître avec l'écran. */
-    class ProxySink : VideoSink {
+    /**
+     * Relais vers une vue qui peut apparaître ou disparaître avec l'écran.
+     * [transform] peut remplacer l'image (null = image d'origine) ; la nouvelle est libérée ici.
+     */
+    class ProxySink(private val transform: ((VideoFrame) -> VideoFrame?)? = null) : VideoSink {
         @Volatile var target: VideoSink? = null
+
+        /** Ratio largeur/hauteur affiché de la dernière image reçue, avant [transform] (0 = aucune). */
+        @Volatile var sourceRatio = 0f
+            private set
+
         override fun onFrame(frame: VideoFrame) {
-            target?.onFrame(frame)
+            sourceRatio = frame.rotatedWidth.toFloat() / frame.rotatedHeight
+            val t = target ?: return
+            val out = transform?.invoke(frame)
+            if (out == null) {
+                t.onFrame(frame)
+            } else {
+                t.onFrame(out)
+                out.release()
+            }
         }
     }
 

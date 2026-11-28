@@ -1,6 +1,7 @@
 package ca.uqac.mobile.dioramaportal.ViewModel
 
 import android.app.Application
+import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -9,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import ca.uqac.mobile.dioramaportal.Log.AppLog
 import ca.uqac.mobile.dioramaportal.Connection.PeerLink
 import ca.uqac.mobile.dioramaportal.Connection.TailscaleDirectory
+import ca.uqac.mobile.dioramaportal.PortalShape
 import ca.uqac.mobile.dioramaportal.VideoCall
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -28,6 +30,43 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Mode portail : vidéo distante seule, plein écran, comme dans le boîtier diorama. */
     val portalMode = MutableStateFlow(false)
+
+    /** Test caméra sans appel : notre propre caméra en plein écran, avec la forme du portail. */
+    val testMode = MutableStateFlow(false)
+
+    fun startTest() {
+        call.startPreview()
+        testMode.value = true
+    }
+
+    fun stopTest() {
+        if (!testMode.value) return
+        testMode.value = false
+        call.stopPreview()
+    }
+
+    private val prefs = app.getSharedPreferences("portal", Context.MODE_PRIVATE)
+
+    /** Taille / forme du portail, gardée d'un lancement à l'autre (même lentille, même boîtier). */
+    val portalShape = MutableStateFlow(
+        PortalShape(
+            zoom = prefs.getFloat("zoom", 1f),
+            stretch = prefs.getFloat("stretch", 1f),
+            offsetX = prefs.getFloat("offsetX", 0f),
+            offsetY = prefs.getFloat("offsetY", 0f),
+        )
+    )
+
+    fun setPortalShape(shape: PortalShape) {
+        portalShape.value = shape
+        call.portalShape = shape
+        prefs.edit()
+            .putFloat("zoom", shape.zoom)
+            .putFloat("stretch", shape.stretch)
+            .putFloat("offsetX", shape.offsetX)
+            .putFloat("offsetY", shape.offsetY)
+            .apply()
+    }
 
     private val connectivityManager = app.getSystemService(ConnectivityManager::class.java)
 
@@ -51,7 +90,11 @@ class CallViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        link.onConnected = { initiator -> call.start(initiator) }
+        call.portalShape = portalShape.value
+        link.onConnected = { initiator ->
+            call.start(initiator)
+            stopTest() // un appel arrive pendant le test : on passe à l'appel, caméra gardée
+        }
         link.onSignal = { json -> call.handleSignal(json) }
         link.onDisconnected = {
             call.stop()

@@ -29,6 +29,7 @@ import ca.uqac.mobile.dioramaportal.Screen.ConnectScreen
 import ca.uqac.mobile.dioramaportal.Screen.PortalScreen
 import ca.uqac.mobile.dioramaportal.ViewModel.CallViewModel
 import ca.uqac.mobile.dioramaportal.ui.theme.DioramaPortalTheme
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -40,13 +41,17 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         if (savedInstanceState == null) requestPermissions()
-        lifecycleScope.launch { vm.portalMode.collect { applyPortalMode(it) } }
+        lifecycleScope.launch {
+            combine(vm.portalMode, vm.testMode) { portal, test -> portal || test }.collect { applyPortalMode(it) }
+        }
         setContent {
             DioramaPortalTheme {
                 val status by vm.link.status.collectAsState()
                 val portal by vm.portalMode.collectAsState()
+                val test by vm.testMode.collectAsState()
                 when {
-                    portal -> PortalScreen(vm.call, onExit = { vm.portalMode.value = false })
+                    test -> PortalScreen(vm, onExit = { vm.stopTest() }, test = true)
+                    portal -> PortalScreen(vm, onExit = { vm.portalMode.value = false })
                     else -> Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                         if (status == PeerLink.Status.CONNECTED) {
                             CallScreen(vm, Modifier.padding(innerPadding))

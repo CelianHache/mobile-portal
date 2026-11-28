@@ -17,6 +17,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Slider
+import androidx.compose.ui.platform.LocalWindowInfo
+import ca.uqac.mobile.dioramaportal.PortalShape
+import kotlin.math.exp
+import kotlin.math.ln
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -46,7 +56,8 @@ import org.webrtc.SurfaceViewRenderer
 
 /**
  * Page d'appel : vidéo au ratio exact du flux reçu, et à côté (paysage) ou dessous (portrait)
- * le panneau avec le bouton « Mode portail » et le journal de l'appel en cours.
+ * le panneau avec le bouton « Mode portail », les réglages de taille du portail
+ * (affichés d'office dès que l'appel commence) et le journal de l'appel en cours.
  */
 @Composable
 fun CallScreen(vm: CallViewModel, modifier: Modifier = Modifier) {
@@ -56,6 +67,8 @@ fun CallScreen(vm: CallViewModel, modifier: Modifier = Modifier) {
     // Ratio largeur/hauteur du flux reçu (connu à la première image). Gardé à la rotation.
     var remoteRatio by rememberSaveable { mutableStateOf<Float?>(null) }
     val onRatio = { r: Float -> remoteRatio = r }
+    // Réglages du portail ouverts d'office au début de l'appel (émis ou reçu).
+    var showShape by rememberSaveable { mutableStateOf(true) }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
         val panel: @Composable (Modifier) -> Unit = { m ->
@@ -65,11 +78,18 @@ fun CallScreen(vm: CallViewModel, modifier: Modifier = Modifier) {
                     Button(onClick = { vm.portalMode.value = true }) { Text("Mode portail") }
                     OutlinedButton(onClick = { vm.link.disconnect() }) { Text("Raccrocher") }
                 }
-                Text("Journal de l'appel", style = MaterialTheme.typography.labelLarge)
-                LogList(
-                    remember(callLog) { callLog.map { it.line } },
-                    Modifier.weight(1f).fillMaxWidth()
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(showShape, { showShape = true }, label = { Text("Taille du portail") })
+                    FilterChip(!showShape, { showShape = false }, label = { Text("Journal") })
+                }
+                if (showShape) {
+                    PortalShapeControls(vm, Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()))
+                } else {
+                    LogList(
+                        remember(callLog) { callLog.map { it.line } },
+                        Modifier.weight(1f).fillMaxWidth()
+                    )
+                }
             }
         }
 
@@ -100,23 +120,58 @@ private val MIN_PANEL = 240.dp
 
 /**
  * Mode portail du diorama : seulement la vidéo de l'autre lieu, sur fond noir, ratio conservé.
- * Appui long ou bouton retour pour revenir à la page d'appel.
+ * Toucher l'écran affiche / masque les réglages de taille ; appui long ou retour pour quitter.
+ *
+ * Aussi utilisé pour le test caméra sans appel ([test] = true) : on y voit notre propre caméra
+ * telle que l'autre appareil l'afficherait, réglages ouverts d'office.
  */
 @Composable
-fun PortalScreen(call: VideoCall, onExit: () -> Unit) {
+fun PortalScreen(vm: CallViewModel, onExit: () -> Unit, test: Boolean = false) {
     var showHint by remember { mutableStateOf(true) }
+    var showControls by remember { mutableStateOf(test) }
     LaunchedEffect(Unit) {
         delay(3000)
         showHint = false
     }
     BackHandler(onBack = onExit)
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-        VideoView(call, call.remoteSink, mirror = false)
-        // Calque transparent au-dessus de la vidéo pour capter l'appui long.
-        Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onLongPress = { onExit() }) })
-        if (showHint) {
+        VideoView(vm.call, if (test) vm.call.previewSink else vm.call.remoteSink, mirror = false)
+        // Calque transparent au-dessus de la vidéo pour capter les appuis.
+        Box(
+            Modifier.fillMaxSize().pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { showControls = !showControls },
+                    onLongPress = { onExit() },
+                )
+            }
+        )
+        if (test) {
             Text(
-                "Appui long pour quitter le mode portail",
+                "Test caméra (sans appel) · Appui long ou retour : quitter",
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(24.dp)
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+        }
+        if (showControls) {
+            PortalShapeControls(
+                vm,
+                test = test,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .widthIn(max = 480.dp)
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                    .padding(12.dp),
+                contentColor = Color.White,
+            )
+        } else if (showHint && !test) {
+            Text(
+                "Toucher : taille du portail · Appui long : quitter",
                 color = Color.White,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -125,6 +180,79 @@ fun PortalScreen(call: VideoCall, onExit: () -> Unit) {
                     .padding(horizontal = 12.dp, vertical = 6.dp)
             )
         }
+    }
+}
+
+/**
+ * Réglages de la forme du portail : zoom sur le cercle de la lentille fisheye, étirement,
+ * décalage, et « Remplir l'écran » qui étire l'image au format exact de l'écran.
+ */
+@Composable
+private fun PortalShapeControls(
+    vm: CallViewModel,
+    modifier: Modifier = Modifier,
+    contentColor: Color = Color.Unspecified,
+    test: Boolean = false,
+) {
+    val shape by vm.portalShape.collectAsState()
+    val window = LocalWindowInfo.current.containerSize
+    val textColor = if (contentColor == Color.Unspecified) MaterialTheme.colorScheme.onSurface else contentColor
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        LabeledSlider("Zoom", "×%.2f".format(shape.zoom), textColor,
+            shape.zoom, PortalShape.MIN_ZOOM..PortalShape.MAX_ZOOM) {
+            vm.setPortalShape(shape.copy(zoom = it))
+        }
+        // Échelle logarithmique : ×1 au milieu, ×4 plus large à droite, ×4 plus haut à gauche.
+        LabeledSlider("Étirement horizontal", "×%.2f".format(shape.stretch), textColor,
+            ln(shape.stretch), ln(PortalShape.MIN_STRETCH)..ln(PortalShape.MAX_STRETCH)) {
+            vm.setPortalShape(shape.copy(stretch = exp(it)))
+        }
+        // Le décalage déplace la zone recadrée : il faut zoomer pour avoir de la marge.
+        val canShift = shape.zoom > 1.01f
+        if (!canShift) {
+            Text("Zoome pour pouvoir décaler l'image", color = textColor, style = MaterialTheme.typography.bodySmall)
+        }
+        LabeledSlider("Décalage horizontal", "%+.0f %%".format(shape.offsetX * 100), textColor,
+            shape.offsetX, -PortalShape.MAX_OFFSET..PortalShape.MAX_OFFSET, enabled = canShift) {
+            vm.setPortalShape(shape.copy(offsetX = it))
+        }
+        LabeledSlider("Décalage vertical", "%+.0f %%".format(shape.offsetY * 100), textColor,
+            shape.offsetY, -PortalShape.MAX_OFFSET..PortalShape.MAX_OFFSET, enabled = canShift) {
+            vm.setPortalShape(shape.copy(offsetY = it))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                // Le zoom garde le format de l'image : il suffit d'étirer jusqu'au format de l'écran.
+                val source = (if (test) vm.call.previewSink else vm.call.remoteSink).sourceRatio
+                if (source > 0f && window.height > 0) {
+                    val target = window.width.toFloat() / window.height
+                    val stretch = (target / source).coerceIn(PortalShape.MIN_STRETCH, PortalShape.MAX_STRETCH)
+                    vm.setPortalShape(shape.copy(stretch = stretch))
+                }
+            }) { Text("Remplir l'écran") }
+            OutlinedButton(onClick = { vm.setPortalShape(PortalShape()) }) {
+                Text("Réinitialiser", color = textColor)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LabeledSlider(
+    label: String,
+    valueText: String,
+    color: Color,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    enabled: Boolean = true,
+    onChange: (Float) -> Unit,
+) {
+    Column {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, color = color, style = MaterialTheme.typography.labelLarge)
+            Text(valueText, color = color, style = MaterialTheme.typography.labelLarge)
+        }
+        Slider(value = value.coerceIn(range), onValueChange = onChange, valueRange = range, enabled = enabled)
     }
 }
 
